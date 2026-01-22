@@ -3,7 +3,7 @@ from tkinter import scrolledtext, messagebox
 import sqlite3
 import requests
 
-API_URL = "http://192.168.240.6"
+API_URL = "http://192.168.240.21"
 
 def init_db():
     with sqlite3.connect("users.db") as db:
