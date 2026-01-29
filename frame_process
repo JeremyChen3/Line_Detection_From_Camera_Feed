@@ -1,0 +1,95 @@
+import cv2
+import numpy as np
+
+
+def reparameterize_curve(points, num_points=200):
+    points = np.asarray(points)
+    if len(points) < 2:
+        return points
+
+    seg = np.diff(points, axis=0)
+    seg_len = np.sqrt((seg * seg).sum(axis=1))
+    arc = np.concatenate(([0.0], np.cumsum(seg_len)))
+    total = arc[-1]
+
+    if total == 0:
+        return points
+
+    t = arc / total
+    t_new = np.linspace(0.0, 1.0, num_points)
+
+    x_new = np.interp(t_new, t, points[:, 0])
+    y_new = np.interp(t_new, t, points[:, 1])
+    return np.column_stack((x_new, y_new))
+
+
+def process_frame(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    h, w = frame.shape[:2]
+    min_area = 100
+    max_area = 0.4 * h * w
+
+    def contour_ok(cnt):
+        area = cv2.contourArea(cnt)
+        if area < min_area or area > max_area:
+            return False
+        x, y, cw, ch = cv2.boundingRect(cnt)
+        if ch == 0:
+            return False
+        ar = cw / ch
+        return 0.1 < ar < 10
+
+    candidates = [c for c in contours if contour_ok(c)]
+    if len(candidates) < 2:
+        return frame
+
+    # pick 2 largest by area
+    candidates.sort(key=cv2.contourArea, reverse=True)
+    c1, c2 = candidates[0], candidates[1]
+
+    def ordered_points(cnt):
+        pts = cnt.reshape(-1, 2)
+        x, y, cw, ch = cv2.boundingRect(cnt)
+        axis = 0 if cw > ch else 1  # 0: sort by x, 1: sort by y
+        return pts[np.argsort(pts[:, axis])]
+
+    n = 500
+    curve1 = reparameterize_curve(ordered_points(c1), n)
+    curve2 = reparameterize_curve(ordered_points(c2), n)
+    center = (curve1 + curve2) / 2.0
+
+    def to_polyline(arr):
+        return arr.astype(np.int32).reshape((-1, 1, 2))
+
+    cv2.polylines(frame, [to_polyline(center)], False, (0, 0, 255), 6)
+    cv2.polylines(frame, [to_polyline(curve1)], False, (255, 0, 0), 2)
+    cv2.polylines(frame, [to_polyline(curve2)], False, (0, 255, 255), 2)
+    return frame
+
+
+def main():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Could not open camera.")
+        return
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        cv2.imshow("Processed Video", process_frame(frame))
+
+        if (cv2.waitKey(1) & 0xFF) == ord("q"):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
