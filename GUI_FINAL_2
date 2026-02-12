@@ -2,12 +2,11 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import sqlite3
 import requests
-
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-API_URL = "http://192.168.240.21"
+API_URL = "http://192.168.240.123"
 
 
 def init_db():
@@ -41,23 +40,49 @@ def reparameterize_curve(points, num_points=200):
     y_new = np.interp(t_new, t, points[:, 1])
     return np.column_stack((x_new, y_new))
 
-
 def process_frame(frame):
+    h, w = frame.shape[:2]
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+    gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    inv = cv2.bitwise_not(gray_blur)
+
+    kx = max(15, w // 30)   # horizontal line length
+    ky = max(15, h // 30)   # vertical line length
+
+    horiz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1))
+    vert_kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (1, ky))
+
+    horiz_lines = cv2.morphologyEx(inv, cv2.MORPH_OPEN, horiz_kernel, iterations=1)
+    vert_lines  = cv2.morphologyEx(inv, cv2.MORPH_OPEN, vert_kernel, iterations=1)
+
+    grid = cv2.bitwise_or(horiz_lines, vert_lines)
+
+    _, mask = cv2.threshold(grid, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+
+    gray_clean = cv2.inpaint(gray_blur, mask, 3, cv2.INPAINT_TELEA)
+    edges = cv2.Canny(gray_clean, 40, 130)
+
+    edges = cv2.morphologyEx(
+        edges,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
+        iterations=1,
+    )
 
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    h, w = frame.shape[:2]
-    min_area = 100
-    max_area = 0.4 * h * w
+    min_area = 150
+    max_area = 0.45 * h * w
 
     def contour_ok(cnt):
         area = cv2.contourArea(cnt)
         if area < min_area or area > max_area:
             return False
         x, y, cw, ch = cv2.boundingRect(cnt)
-        if ch == 0:
+        if ch == 0 or cw == 0:
             return False
         ar = cw / ch
         return 0.1 < ar < 10
@@ -83,9 +108,11 @@ def process_frame(frame):
     def to_polyline(arr):
         return arr.astype(np.int32).reshape((-1, 1, 2))
 
+    # Draw results
     cv2.polylines(frame, [to_polyline(center)], False, (0, 0, 255), 6)
     cv2.polylines(frame, [to_polyline(curve1)], False, (255, 0, 0), 2)
     cv2.polylines(frame, [to_polyline(curve2)], False, (0, 255, 255), 2)
+
     return frame
 
 
